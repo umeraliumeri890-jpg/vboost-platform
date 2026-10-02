@@ -29,22 +29,15 @@ const app = express();
 
 // ─── Security Headers ─────────────────────────────────────────────────────────
 app.use(helmet());
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, Postman, curl)
-      if (!origin) return callback(null, true);
-      const allowed = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map((u) => u.trim()) : [];
-      if (allowed.length === 0 || allowed.includes('*') || allowed.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(null, true); // permit all during initial setup
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Microtask-Signature'],
-  })
-);
+
+const corsOptions = {
+  origin: process.env.CLIENT_URL || 'https://vboost-platform.vercel.app',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Handle all preflight requests
 
 // ─── Rate Limiting ────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -93,14 +86,16 @@ app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/admin', adminRoutes);
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
-app.get('/api/health', (req, res) => {
+const healthPayload = (req, res) =>
   res.json({
     status: 'ok',
     uptime: Math.floor(process.uptime()),
     timestamp: new Date().toISOString(),
     version: process.env.npm_package_version || '1.0.0',
   });
-});
+
+app.get('/api/health', healthPayload);
+app.get('/api/v1/health', healthPayload); // versioned alias
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 app.use((req, res) => {
