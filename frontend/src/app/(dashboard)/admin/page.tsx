@@ -225,7 +225,7 @@ function UserDetailModal({
 
 // ─── Main Admin Page ────────────────────────────────────────────────────────
 export default function AdminDashboardPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const { formatPrice } = useCurrency();
   const router = useRouter();
 
@@ -243,7 +243,7 @@ export default function AdminDashboardPage() {
   const [userTotalPages, setUserTotalPages] = useState(1);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 
-  const isAdmin = user?.roles?.includes('admin');
+  const isAdmin = Boolean(user?.role === 'admin' || user?.roles?.includes('admin'));
 
   const loadData = useCallback(async () => {
     if (!isAdmin) return;
@@ -276,18 +276,33 @@ export default function AdminDashboardPage() {
   }, [isAdmin, userPage, userSearch]);
 
   useEffect(() => {
-    if (user && !isAdmin) router.replace('/worker');
-    else if (isAdmin) { loadData(); loadUsers(); }
-  }, [user, isAdmin, router, loadData, loadUsers]);
+    if (authLoading) return;
+    if (!user) {
+      router.replace('/login');
+    } else if (!isAdmin) {
+      router.replace('/worker');
+    } else {
+      loadData();
+      loadUsers();
+    }
+  }, [user, authLoading, isAdmin, router, loadData, loadUsers]);
 
   useEffect(() => {
-    if (isAdmin) loadUsers();
-  }, [userPage, userSearch, loadUsers, isAdmin]);
+    if (!authLoading && isAdmin) loadUsers();
+  }, [userPage, userSearch, loadUsers, isAdmin, authLoading]);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (!isAdmin) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-slate-500">Access Restricted. Admins only.</p>
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <p className="text-slate-500 font-semibold">Access Restricted. Admins only.</p>
       </div>
     );
   }

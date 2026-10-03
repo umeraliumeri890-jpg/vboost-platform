@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, ChevronDown, ChevronRight, Globe, CreditCard,
-  Users, Star, CheckCircle, ExternalLink, ShieldCheck, Sparkles
+  Users, Star, CheckCircle, ExternalLink, ShieldCheck, Sparkles, ShieldAlert
 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 import clsx from 'clsx';
 
 interface SidebarProps {
@@ -13,7 +14,9 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ mode }: SidebarProps) {
+  const { user } = useAuth();
   const pathname = usePathname();
+  const isAdmin = Boolean(user?.role === 'admin' || user?.roles?.includes('admin'));
   const [socialOpen, setSocialOpen] = useState(true);
   const [tasksOpen, setTasksOpen] = useState(true);
   const [advSocialOpen, setAdvSocialOpen] = useState(false);
@@ -243,6 +246,30 @@ export default function Sidebar({ mode }: SidebarProps) {
             </Link>
           </div>
         </div>
+
+        {/* ─── ADMINISTRATION SECTION ───────────────────────────── */}
+        {isAdmin && (
+          <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800">
+            <div className="px-2.5 mb-1.5 text-[10px] font-bold text-red-500 uppercase tracking-wider">
+              Administration
+            </div>
+
+            <div className="space-y-0.5">
+              <Link
+                href="/admin"
+                className={clsx(
+                  'flex items-center gap-2.5 px-3 py-2 rounded-xl font-bold transition-all',
+                  pathname === '/admin'
+                    ? 'bg-red-500 text-white shadow-xs'
+                    : 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30'
+                )}
+              >
+                <ShieldAlert className="w-4 h-4 shrink-0" />
+                <span>Admin Panel</span>
+              </Link>
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );

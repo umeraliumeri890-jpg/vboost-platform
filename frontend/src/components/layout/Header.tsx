@@ -5,7 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useCurrency, Currency, Language } from '@/context/CurrencyContext';
 import {
   Wallet, Megaphone, Moon, Sun, ChevronDown,
-  LogOut, User as UserIcon, Check, Copy, Zap, ArrowLeftRight
+  LogOut, User as UserIcon, Check, Copy, Zap, ArrowLeftRight, ShieldAlert
 } from 'lucide-react';
 import WithdrawModal from '@/components/ui/WithdrawModal';
 import TopUpModal from '@/components/ui/TopUpModal';
@@ -179,6 +179,16 @@ export default function Header({ title, showLogo = false }: HeaderProps) {
                         <ArrowLeftRight className="w-4 h-4 text-purple-500" />
                         Advertiser Cabinet
                       </Link>
+                      {(user.role === 'admin' || user.roles?.includes('admin')) && (
+                        <Link
+                          href="/admin"
+                          onClick={() => setUserMenuOpen(false)}
+                          className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-red-600 dark:text-red-400 bg-red-50/50 dark:bg-red-950/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg"
+                        >
+                          <ShieldAlert className="w-4 h-4 text-red-600 dark:text-red-400" />
+                          Admin Control Center
+                        </Link>
+                      )}
                     </div>
 
                     <div className="border-t border-slate-100 dark:border-slate-800 pt-1">

@@ -33,14 +33,17 @@ async function run() {
       process.exit(1);
     }
 
-    // Add 'admin' to the roles array (no duplicates)
+    // Add 'admin' to the roles array (no duplicates) and set role to 'admin'
     const result = await User.updateOne(
       { _id: user._id },
-      { $addToSet: { roles: 'admin' } }
+      {
+        $set: { role: 'admin' },
+        $addToSet: { roles: 'admin' },
+      }
     );
 
     // Verify final state
-    const updated = await User.findById(user._id).select('username email roles');
+    const updated = await User.findById(user._id).select('username email role roles');
 
     if (result.modifiedCount === 0) {
       console.log(`\n⚠️   User "${updated.username}" (${email}) already has the 'admin' role.`);

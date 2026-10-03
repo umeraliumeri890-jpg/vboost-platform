@@ -93,7 +93,9 @@ const apiKeyAuth = asyncHandler(async (req, res, next) => {
 const restrictTo = (...roles) =>
   (req, res, next) => {
     if (!req.user) return next(new AppError('Not authenticated.', 401));
-    const hasRole = roles.some((r) => req.user.roles.includes(r));
+    const userRole = req.user.role;
+    const userRoles = Array.isArray(req.user.roles) ? req.user.roles : [];
+    const hasRole = roles.some((r) => userRoles.includes(r) || userRole === r);
     if (!hasRole) {
       return next(new AppError('You do not have permission to perform this action.', 403));
     }

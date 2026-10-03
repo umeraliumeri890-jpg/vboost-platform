@@ -35,11 +35,50 @@ const seedData = async () => {
       await User.deleteMany({ _id: { $in: demoUserIds } });
     }
 
-    // 1. Create Demo Admin (pre-save hook in User model will hash passwordHash)
+    // 1. Create Dedicated VBoost Admin
+    const vboostAdmin = await User.findOne({ email: 'admin@vboost.com' });
+    const adminSalt = await bcrypt.genSalt(12);
+    const adminPassHash = await bcrypt.hash('AdminPassword123!', adminSalt);
+    if (!vboostAdmin) {
+      await User.collection.insertOne({
+        username: 'vboost_admin',
+        email: 'admin@vboost.com',
+        passwordHash: adminPassHash,
+        role: 'admin',
+        roles: ['admin', 'worker', 'advertiser'],
+        balances: { main: 100.0, ad: 100.0 },
+        gamification: { xp: 5000, level: 10, streakDays: 30, longestStreak: 30 },
+        stats: { tasksCompleted: 0, totalEarned: 0, totalSpent: 0, campaignsCreated: 0 },
+        referralCode: 'admin_vboost_master',
+        isVerified: true,
+        isActive: true,
+        isBanned: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      logger.info('Dedicated admin created: admin@vboost.com');
+    } else {
+      await User.updateOne(
+        { email: 'admin@vboost.com' },
+        {
+          $set: {
+            passwordHash: adminPassHash,
+            role: 'admin',
+            roles: ['admin', 'worker', 'advertiser'],
+            isActive: true,
+            isBanned: false,
+            isVerified: true,
+          },
+        }
+      );
+    }
+
+    // 2. Create Demo Admin (pre-save hook in User model will hash passwordHash)
     const admin = await User.create({
       username: 'admin',
       email: 'admin@microtask.com',
       passwordHash: 'Password123!',
+      role: 'admin',
       roles: ['admin', 'advertiser', 'worker'],
       balances: { main: 150.0, ad: 500.0 },
       gamification: { xp: 1200, level: 5, streakDays: 14, longestStreak: 14 },

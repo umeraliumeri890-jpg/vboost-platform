@@ -76,7 +76,11 @@ const UserSchema = new mongoose.Schema(
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
     isBanned: { type: Boolean, default: false },
-    banReason: { type: String, default: null },
+    role: {
+      type: String,
+      enum: ['worker', 'advertiser', 'admin'],
+      default: 'worker',
+    },
     roles: {
       type: [String],
       enum: ['worker', 'advertiser', 'admin'],

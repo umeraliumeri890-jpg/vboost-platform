@@ -18,8 +18,12 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      await login(form.email, form.password);
-      router.push('/worker');
+      const loggedUser = await login(form.email, form.password);
+      if (loggedUser?.role === 'admin' || loggedUser?.roles?.includes('admin')) {
+        router.push('/admin');
+      } else {
+        router.push('/worker');
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Login failed. Please try again.');
     } finally {

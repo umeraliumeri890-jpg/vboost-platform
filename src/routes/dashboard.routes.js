@@ -54,6 +54,9 @@ router.get('/', protect, asyncHandler(async (req, res) => {
       user: {
         id: req.user._id,
         username: req.user.username,
+        email: req.user.email,
+        role: req.user.role || (req.user.roles?.includes('admin') ? 'admin' : (req.user.roles?.[0] || 'worker')),
+        roles: req.user.roles || ['worker'],
         avatar: req.user.avatar,
         balances: req.user.balances,
         gamification: {
@@ -62,6 +65,7 @@ router.get('/', protect, asyncHandler(async (req, res) => {
           nextLevelThreshold: nextLevelXp,
         },
         stats: req.user.stats,
+        isVerified: req.user.isVerified,
         referralCode: req.user.referralCode,
         socialAccounts: req.user.socialAccounts || {},
       },

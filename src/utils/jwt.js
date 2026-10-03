@@ -31,6 +31,7 @@ const buildAuthResponse = (user, accessToken, refreshToken) => ({
     id: user._id,
     username: user.username,
     email: user.email,
+    role: user.role || (user.roles?.includes('admin') ? 'admin' : (user.roles?.[0] || 'worker')),
     roles: user.roles,
     balances: user.balances,
     gamification: {

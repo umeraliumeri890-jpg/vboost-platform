@@ -3,6 +3,7 @@ export interface User {
   username: string;
   email: string;
   avatar?: string;
+  role?: string;
   roles: string[];
   balances: { main: number; ad: number };
   gamification: {
