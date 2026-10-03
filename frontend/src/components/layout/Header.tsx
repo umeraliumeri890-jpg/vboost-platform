@@ -1,14 +1,17 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
 import { useCurrency, Currency, Language } from '@/context/CurrencyContext';
 import {
   Wallet, Megaphone, Moon, Sun, ChevronDown,
-  LogOut, User as UserIcon, Check, Copy, Zap, ArrowLeftRight, ShieldAlert
+  LogOut, User as UserIcon, Check, Copy, Zap, ArrowLeftRight, ShieldAlert,
+  Bell, CheckCheck
 } from 'lucide-react';
 import WithdrawModal from '@/components/ui/WithdrawModal';
 import TopUpModal from '@/components/ui/TopUpModal';
+import { notificationsApi } from '@/lib/api';
+import { NotificationItem } from '@/types';
 
 interface HeaderProps {
   title?: string;
@@ -22,6 +25,48 @@ export default function Header({ title, showLogo = false }: HeaderProps) {
   const [isWithdrawOpen, setIsWithdrawOpen] = useState(false);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+
+  // In-app notifications state
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const fetchNotifications = useCallback(async () => {
+    if (!user) return;
+    try {
+      const { data } = await notificationsApi.list({ limit: 10 });
+      setNotifications(data.data.notifications || []);
+      setUnreadCount(data.data.unreadCount || 0);
+    } catch {
+      // ignore silently if offline
+    }
+  }, [user]);
+
+  useEffect(() => {
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 30000);
+    return () => clearInterval(interval);
+  }, [fetchNotifications]);
+
+  const handleMarkAllRead = async () => {
+    try {
+      await notificationsApi.markAllRead();
+      setUnreadCount(0);
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    } catch {}
+  };
+
+  const handleNotificationClick = async (notif: NotificationItem) => {
+    if (!notif.read) {
+      try {
+        await notificationsApi.markRead(notif._id);
+        setUnreadCount((c) => Math.max(0, c - 1));
+        setNotifications((prev) =>
+          prev.map((n) => (n._id === notif._id ? { ...n, read: true } : n))
+        );
+      } catch {}
+    }
+  };
 
   // User initials for avatar circle (like 'UA' in screenshot)
   const getInitials = (name?: string) => {
@@ -127,6 +172,87 @@ export default function Header({ title, showLogo = false }: HeaderProps) {
             </select>
             <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
+
+          {/* In-App Notification Bell & Dropdown */}
+          {user && (
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setNotificationsOpen(!notificationsOpen);
+                  if (!notificationsOpen) fetchNotifications();
+                }}
+                title="Notifications"
+                className="relative w-8 h-8 rounded-full flex items-center justify-center text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                <Bell className="w-4 h-4" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center animate-pulse">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {notificationsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setNotificationsOpen(false)} />
+                  <div className="absolute right-0 mt-2 w-80 sm:w-96 v-card p-0 shadow-2xl z-50 animate-slide-up overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-slate-900 dark:text-white">Notifications</span>
+                        {unreadCount > 0 && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400">
+                            {unreadCount} new
+                          </span>
+                        )}
+                      </div>
+                      {unreadCount > 0 && (
+                        <button
+                          onClick={handleMarkAllRead}
+                          className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" /> Mark all read
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="max-h-80 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                      {notifications.length === 0 ? (
+                        <div className="p-6 text-center text-slate-400 text-xs">
+                          <Bell className="w-6 h-6 mx-auto mb-2 opacity-40" />
+                          No notifications yet
+                        </div>
+                      ) : (
+                        notifications.map((item) => (
+                          <div
+                            key={item._id}
+                            onClick={() => handleNotificationClick(item)}
+                            className={`p-3.5 text-xs transition-colors cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/60 ${
+                              !item.read ? 'bg-blue-50/40 dark:bg-blue-950/20' : ''
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <p className={`font-semibold ${!item.read ? 'text-blue-600 dark:text-blue-400' : 'text-slate-900 dark:text-white'}`}>
+                                {item.title}
+                              </p>
+                              {!item.read && (
+                                <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0 mt-1" />
+                              )}
+                            </div>
+                            <p className="text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                              {item.message}
+                            </p>
+                            <p className="text-[10px] text-slate-400 mt-1.5">
+                              {new Date(item.createdAt).toLocaleString()}
+                            </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           {/* User Profile Pill (Avatar Circle UA + Name + Dropdown) */}
           {user && (

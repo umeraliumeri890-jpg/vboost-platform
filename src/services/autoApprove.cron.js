@@ -18,22 +18,19 @@ const mongoose = require('mongoose');
 const Completion = require('../models/Completion');
 const Campaign = require('../models/Campaign');
 const User = require('../models/User');
+const SystemSetting = require('../models/SystemSetting');
+const { notifyUser } = require('./notification.service');
 const { processTaskPayout } = require('./ledger.service');
 const { syncResellerOffers } = require('./reseller.service');
 const logger = require('../config/logger');
 
-// ─── 1. Auto-approve eligible completions (every minute) ─────────────────────
-cron.schedule('* * * * *', async () => {
+/**
+ * Process auto-approval for a list of completions.
+ */
+async function processAutoApprovals(eligibleList, reason = 'auto-approve') {
   const now = new Date();
-  const eligible = await Completion.find({
-    status: 'submitted',
-    autoApproveAt: { $lte: now },
-  }).populate('campaign');
-
-  if (eligible.length === 0) return;
-  logger.info(`Auto-approve cron: processing ${eligible.length} completions`);
-
-  for (const completion of eligible) {
+  for (const completion of eligibleList) {
+    if (!completion.campaign) continue;
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -76,13 +73,63 @@ cron.schedule('* * * * *', async () => {
       await completion.save({ session });
 
       await session.commitTransaction();
-      logger.debug(`Auto-approved completion ${completion._id}`);
+      logger.info(`Auto-approved completion ${completion._id} (${reason})`);
+
+      // In-app notifications
+      notifyUser({
+        userId: worker._id,
+        title: '⚡ Task Proof Auto-Approved',
+        message: `Your submission for "${completion.campaign.title}" was auto-approved! $${workerEarning.toFixed(3)} credited to your balance.`,
+        type: 'task',
+      }).catch(() => {});
+
+      notifyUser({
+        userId: advertiser._id,
+        title: 'ℹ Task Submission Auto-Approved',
+        message: `Task submission for "${completion.campaign.title}" was automatically approved after the review window elapsed.`,
+        type: 'task',
+      }).catch(() => {});
     } catch (err) {
       await session.abortTransaction();
       logger.error(`Auto-approve failed for ${completion._id}: ${err.message}`);
     } finally {
       session.endSession();
     }
+  }
+}
+
+// ─── 1. Check autoApproveAt scheduled completions (every minute) ───────────────
+cron.schedule('* * * * *', async () => {
+  const settings = await SystemSetting.getSettings();
+  if (!settings.autoApproveEnabled) return;
+
+  const now = new Date();
+  const eligible = await Completion.find({
+    status: 'submitted',
+    autoApproveAt: { $lte: now },
+  }).populate('campaign').limit(50);
+
+  if (eligible.length > 0) {
+    await processAutoApprovals(eligible, 'autoApproveAt schedule');
+  }
+});
+
+// ─── 1b. Hourly Sweep: Auto-Approve Stale Tasks (> 48 hours) ──────────────────
+cron.schedule('0 * * * *', async () => {
+  const settings = await SystemSetting.getSettings();
+  if (!settings.autoApproveEnabled) return;
+
+  const hours = settings.autoApproveHours || 48;
+  const threshold = new Date(Date.now() - hours * 3600 * 1000);
+
+  const staleCompletions = await Completion.find({
+    status: 'submitted',
+    createdAt: { $lte: threshold },
+  }).populate('campaign').limit(100);
+
+  if (staleCompletions.length > 0) {
+    logger.info(`Hourly Auto-Approve Sweep: found ${staleCompletions.length} submissions older than ${hours}h`);
+    await processAutoApprovals(staleCompletions, `stale > ${hours}h`);
   }
 });
 

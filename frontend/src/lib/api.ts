@@ -43,9 +43,16 @@ api.interceptors.response.use(
 
 // ─── Auth ────────────────────────────────────────────────
 export const authApi = {
-  register: (data: { username: string; email: string; password: string; referralCode?: string }) =>
-    api.post('/auth/register', data),
-  login: (data: { email: string; password: string }) => api.post('/auth/login', data),
+  register: (data: {
+    username: string;
+    email: string;
+    password: string;
+    referralCode?: string;
+    ref?: string;
+    deviceFingerprint?: string;
+  }) => api.post('/auth/register', data),
+  login: (data: { email: string; password: string; deviceFingerprint?: string }) =>
+    api.post('/auth/login', data),
   logout: () => api.post('/auth/logout'),
   me: () => api.get('/auth/me'),
 };
@@ -144,4 +151,31 @@ export const adminApi = {
     api.patch(`/payments/admin/approve-deposit/${id}`, { adminNote }),
   rejectDeposit: (id: string, adminNote?: string) =>
     api.patch(`/payments/admin/reject-deposit/${id}`, { adminNote }),
+};
+
+// ─── Notifications ───────────────────────────────────────
+export const notificationsApi = {
+  list: (params?: { page?: number; limit?: number; unreadOnly?: boolean }) =>
+    api.get('/notifications', { params }),
+  markRead: (id: string) => api.patch(`/notifications/${id}/read`),
+  markAllRead: () => api.patch('/notifications/read-all'),
+};
+
+// ─── System Settings (Admin) ─────────────────────────────
+export const settingsApi = {
+  get: () => api.get('/admin/settings'),
+  update: (data: Record<string, any>) => api.patch('/admin/settings', data),
+};
+
+// ─── Audit Logs (Admin) ──────────────────────────────────
+export const auditApi = {
+  list: (params?: { page?: number; limit?: number; action?: string; targetUser?: string }) =>
+    api.get('/admin/audit-logs', { params }),
+};
+
+// ─── Banned IPs (Admin) ──────────────────────────────────
+export const bannedIpApi = {
+  list: () => api.get('/admin/banned-ips'),
+  ban: (data: { ip: string; reason?: string }) => api.post('/admin/banned-ips', data),
+  unban: (ip: string) => api.delete(`/admin/banned-ips/${encodeURIComponent(ip)}`),
 };

@@ -13,13 +13,17 @@ const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 
 const PaymentRequest = require('../models/PaymentRequest');
 const User = require('../models/User');
+const SystemSetting = require('../models/SystemSetting');
 const { protect, restrictTo } = require('../middleware/auth');
 const asyncHandler = require('../utils/asyncHandler');
 const { AppError } = require('../utils/errors');
 const { creditBalance, debitBalance } = require('../services/ledger.service');
+const { notifyUser } = require('../services/notification.service');
+const { logAudit } = require('../services/audit.service');
 
 // Platform receiving addresses (set in .env)
 const PLATFORM_ADDRESSES = {
@@ -256,6 +260,162 @@ router.patch(
   })
 );
 
+// ─── POST /api/v1/payments/crypto-webhook (NOWPayments / CoinPayments Auto-Deposit) ──
+router.post(
+  '/crypto-webhook',
+  asyncHandler(async (req, res) => {
+    const settings = await SystemSetting.getSettings();
+    const payload = req.body || {};
+
+    // 1. Detect Gateway Type
+    // NOWPayments format:
+    // payload: { payment_id, payment_status, pay_amount, price_amount, order_id, actually_paid, outcome_amount }
+    // Header: x-nowpayments-sig
+    const nowPaySig = req.headers['x-nowpayments-sig'];
+    const coinPayHmac = req.headers['hmac'] || req.headers['http_hmac'];
+
+    let isSuccess = false;
+    let externalTxid = payload.payment_id || payload.txn_id || payload.txid;
+    let amount = parseFloat(payload.price_amount || payload.amount1 || payload.actually_paid || payload.amount || 0);
+    let identifier = payload.order_id || payload.custom || payload.userId || payload.orderId;
+    let paymentMethod = payload.pay_currency ? `CRYPTO_${String(payload.pay_currency).toUpperCase()}` : 'CRYPTO_WEBHOOK';
+
+    if (nowPaySig && settings.nowPaymentsIpnSecret) {
+      // NOWPayments HMAC-SHA512 verification
+      const sortedKeys = Object.keys(payload).sort();
+      const sortedObj = {};
+      sortedKeys.forEach((key) => { sortedObj[key] = payload[key]; });
+      const hmac = crypto.createHmac('sha512', settings.nowPaymentsIpnSecret);
+      hmac.update(JSON.stringify(sortedObj));
+      const calculatedSig = hmac.digest('hex');
+      if (calculatedSig !== nowPaySig) {
+        return res.status(401).json({ status: 'fail', message: 'Invalid NOWPayments signature.' });
+      }
+    }
+
+    if (['finished', 'confirmed', 'completed'].includes(payload.payment_status?.toLowerCase()) ||
+        payload.status === '100' || payload.status === 100 || payload.status === '2' || payload.status === 2 ||
+        payload.event === 'payment.finished' || payload.status === 'completed') {
+      isSuccess = true;
+    }
+
+    if (!isSuccess) {
+      return res.status(200).json({ status: 'ok', message: `Webhook received with non-final status: ${payload.payment_status || payload.status}` });
+    }
+
+    if (!externalTxid) {
+      externalTxid = `AUTO_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    }
+
+    // Locate matching PaymentRequest or User
+    let payReq = null;
+    if (identifier && mongoose.Types.ObjectId.isValid(identifier)) {
+      payReq = await PaymentRequest.findById(identifier).populate('user');
+    }
+    if (!payReq && externalTxid) {
+      payReq = await PaymentRequest.findOne({ txid: String(externalTxid).trim() }).populate('user');
+    }
+
+    let targetUser = payReq?.user;
+    if (!targetUser && identifier) {
+      targetUser = await User.findOne({
+        $or: [
+          ...(mongoose.Types.ObjectId.isValid(identifier) ? [{ _id: identifier }] : []),
+          { username: identifier },
+          { email: identifier },
+        ],
+      });
+    }
+
+    if (!targetUser) {
+      return res.status(404).json({ status: 'fail', message: 'Unable to locate user for this payment callback.' });
+    }
+
+    const depositAmount = payReq?.amount || amount;
+    if (depositAmount <= 0) {
+      return res.status(400).json({ status: 'fail', message: 'Invalid deposit amount received.' });
+    }
+
+    // Avoid double credit if already completed
+    if (payReq && payReq.status === 'completed') {
+      return res.status(200).json({ status: 'ok', message: 'Payment already processed and credited.' });
+    }
+
+    // Automated credit to user's Ad Balance
+    const balanceTarget = payReq?.balanceTarget || 'ad';
+    await creditBalance({
+      userId: targetUser._id,
+      amount: depositAmount,
+      balanceType: balanceTarget,
+      type: 'deposit',
+      note: `Automated Crypto Deposit (${paymentMethod}) — Confirmed`,
+    });
+
+    if (payReq) {
+      payReq.status = 'completed';
+      payReq.processedAt = new Date();
+      payReq.adminNote = 'Auto-approved via Crypto Gateway Webhook';
+      await payReq.save();
+    } else {
+      await PaymentRequest.create({
+        user: targetUser._id,
+        type: 'deposit',
+        balanceTarget,
+        amount: depositAmount,
+        paymentMethod,
+        txid: String(externalTxid),
+        status: 'completed',
+        adminNote: 'Auto-approved via Crypto Gateway Webhook',
+        processedAt: new Date(),
+      });
+    }
+
+    // Automated Referral Commission on Deposit
+    const refPercent = settings.referralCommissionPercent ?? 5;
+    if (targetUser.referredBy && refPercent > 0) {
+      const refBonus = parseFloat(((depositAmount * refPercent) / 100).toFixed(4));
+      if (refBonus > 0) {
+        await creditBalance({
+          userId: targetUser.referredBy,
+          amount: refBonus,
+          balanceType: 'main',
+          type: 'referral_bonus',
+          note: `Referral commission (${refPercent}%) from deposit by @${targetUser.username}`,
+        });
+        await User.findByIdAndUpdate(targetUser.referredBy, { $inc: { referralEarnings: refBonus } });
+        notifyUser({
+          userId: targetUser.referredBy,
+          title: '💰 Referral Deposit Bonus Received!',
+          message: `You received a $${refBonus.toFixed(2)} referral bonus (${refPercent}%) from @${targetUser.username}'s deposit!`,
+          type: 'referral',
+        }).catch(() => {});
+      }
+    }
+
+    // In-app notification to depositor
+    notifyUser({
+      userId: targetUser._id,
+      title: '💰 Crypto Deposit Confirmed!',
+      message: `$${depositAmount.toFixed(2)} has been automatically credited to your ${balanceTarget.toUpperCase()} Balance!`,
+      type: 'deposit',
+    }).catch(() => {});
+
+    // Audit log
+    logAudit({
+      action: 'CRYPTO_AUTO_DEPOSIT_WEBHOOK',
+      performedBy: targetUser._id,
+      targetUser: targetUser._id,
+      details: { amount: depositAmount, txid: externalTxid, method: paymentMethod },
+      ip: req.ip,
+    }).catch(() => {});
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Deposit verified and user balance credited automatically.',
+    });
+  })
+);
+
 // ─── PATCH /api/v1/payments/admin/approve-deposit/:id ────────────────────────
 // Balance increment ONLY executes upon explicit manual Admin approval
 const handleApproveDeposit = asyncHandler(async (req, res) => {
@@ -284,6 +444,46 @@ const handleApproveDeposit = asyncHandler(async (req, res) => {
   payReq.processedAt = new Date();
   payReq.adminNote = req.body.adminNote || 'Approved by Admin';
   await payReq.save();
+
+  // Automated Referral Commission on approved deposit
+  const settings = await SystemSetting.getSettings();
+  const refPercent = settings.referralCommissionPercent ?? 5;
+  if (payReq.user.referredBy && refPercent > 0) {
+    const refBonus = parseFloat(((payReq.amount * refPercent) / 100).toFixed(4));
+    if (refBonus > 0) {
+      await creditBalance({
+        userId: payReq.user.referredBy,
+        amount: refBonus,
+        balanceType: 'main',
+        type: 'referral_bonus',
+        note: `Referral commission (${refPercent}%) from deposit by @${payReq.user.username}`,
+      });
+      await User.findByIdAndUpdate(payReq.user.referredBy, { $inc: { referralEarnings: refBonus } });
+      notifyUser({
+        userId: payReq.user.referredBy,
+        title: '💰 Referral Deposit Bonus!',
+        message: `You received a $${refBonus.toFixed(2)} referral bonus (${refPercent}%) from @${payReq.user.username}'s deposit!`,
+        type: 'referral',
+      }).catch(() => {});
+    }
+  }
+
+  // User notification
+  notifyUser({
+    userId: payReq.user._id,
+    title: '✅ Deposit Request Approved',
+    message: `Your deposit of $${payReq.amount.toFixed(2)} (${payReq.paymentMethod}) was approved and credited to your Ad Balance!`,
+    type: 'deposit',
+  }).catch(() => {});
+
+  // Audit log
+  logAudit({
+    action: 'DEPOSIT_APPROVE',
+    performedBy: req.user._id,
+    targetUser: payReq.user._id,
+    details: { amount: payReq.amount, txid: payReq.txid, method: payReq.paymentMethod, note: payReq.adminNote },
+    ip: req.clientIp || req.ip,
+  }).catch(() => {});
 
   res.json({
     status: 'success',
@@ -317,6 +517,23 @@ const handleRejectDeposit = asyncHandler(async (req, res) => {
   payReq.processedAt = new Date();
   payReq.adminNote = req.body.adminNote || req.body.reason || 'Rejected by Admin';
   await payReq.save();
+
+  // User notification
+  notifyUser({
+    userId: payReq.user._id,
+    title: '❌ Deposit Request Rejected',
+    message: `Your deposit request of $${payReq.amount.toFixed(2)} was rejected. Reason: ${payReq.adminNote}`,
+    type: 'deposit',
+  }).catch(() => {});
+
+  // Audit log
+  logAudit({
+    action: 'DEPOSIT_REJECT',
+    performedBy: req.user._id,
+    targetUser: payReq.user._id,
+    details: { amount: payReq.amount, txid: payReq.txid, reason: payReq.adminNote },
+    ip: req.clientIp || req.ip,
+  }).catch(() => {});
 
   res.json({
     status: 'success',

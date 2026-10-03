@@ -22,6 +22,8 @@ const webhookRoutes = require('./routes/webhook.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const adminRoutes = require('./routes/admin.routes');
 const paymentsRoutes = require('./routes/payments.routes');
+const notificationsRoutes = require('./routes/notifications.routes');
+const { antiCheatFilter } = require('./middleware/antiCheat');
 
 // ─── Cron Jobs ────────────────────────────────────────────────────────────────
 require('./services/autoApprove.cron');
@@ -76,6 +78,9 @@ app.use('/api/v1/webhooks', webhookRoutes);
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
+// ─── Anti-Cheat & Maintenance Filter ──────────────────────────────────────────
+app.use(antiCheatFilter);
+
 // ─── Static Files (proof screenshots) ────────────────────────────────────────
 app.use('/uploads', express.static(path.resolve(__dirname, '../uploads')));
 
@@ -86,6 +91,7 @@ app.use('/api/v1/completions', completionsRoutes);
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/payments', paymentsRoutes);
+app.use('/api/v1/notifications', notificationsRoutes);
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 const healthPayload = (req, res) =>

@@ -3,12 +3,13 @@ import { useState, useEffect, useCallback } from 'react';
 import Header from '@/components/layout/Header';
 import { useAuth } from '@/context/AuthContext';
 import { useCurrency } from '@/context/CurrencyContext';
-import { adminApi } from '@/lib/api';
+import { adminApi, settingsApi, auditApi, bannedIpApi } from '@/lib/api';
+import { SystemSettings, AuditLogItem, BannedIp } from '@/types';
 import Badge from '@/components/ui/Badge';
 import {
   ShieldAlert, Users, CreditCard, RefreshCw,
   CheckCircle, Loader2, Search, ChevronLeft, ChevronRight,
-  BarChart3, DollarSign, Scale, X
+  BarChart3, DollarSign, Scale, X, Sliders, FileText, Ban, Save, Power, ShieldCheck, AlertCircle
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -116,6 +117,11 @@ function UserDetailModal({
                         {u.isBanned ? 'Banned' : 'Active'}
                       </span>
                     </div>
+                    <div><span className="text-slate-400">Reg IP: </span><span className="font-mono text-slate-700 dark:text-slate-300">{u.registrationIp || '—'}</span></div>
+                    <div><span className="text-slate-400">Last IP: </span><span className="font-mono text-slate-700 dark:text-slate-300">{u.lastLoginIp || '—'}</span></div>
+                    {u.deviceFingerprint && (
+                      <div className="col-span-2"><span className="text-slate-400">Device Fingerprint: </span><span className="font-mono text-[10px] text-slate-500 break-all">{u.deviceFingerprint}</span></div>
+                    )}
                   </div>
 
                   {/* Balance Adjust */}
@@ -235,7 +241,7 @@ export default function AdminDashboardPage() {
   const [disputes, setDisputes] = useState<any[]>([]);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'payouts' | 'deposits' | 'disputes' | 'users' | 'analytics'>('payouts');
+  const [activeTab, setActiveTab] = useState<'payouts' | 'deposits' | 'disputes' | 'users' | 'settings' | 'audit' | 'bannedIps' | 'analytics'>('payouts');
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState('');
@@ -243,27 +249,65 @@ export default function AdminDashboardPage() {
   const [userTotalPages, setUserTotalPages] = useState(1);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 
+  // Settings State
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsMsg, setSettingsMsg] = useState('');
+
+  // Audit Logs State
+  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditTotalPages, setAuditTotalPages] = useState(1);
+  const [auditLoading, setAuditLoading] = useState(false);
+
+  // Banned IPs State
+  const [bannedIps, setBannedIps] = useState<BannedIp[]>([]);
+  const [newIp, setNewIp] = useState('');
+  const [newIpReason, setNewIpReason] = useState('');
+  const [banningIp, setBanningIp] = useState(false);
+
   const isAdmin = Boolean(user?.role === 'admin' || user?.roles?.includes('admin'));
 
   const loadData = useCallback(async () => {
     if (!isAdmin) return;
     setLoading(true);
     try {
-      const [statsRes, payoutsRes, disputesRes, analyticsRes, paymentsRes] = await Promise.allSettled([
+      const [statsRes, payoutsRes, disputesRes, analyticsRes, paymentsRes, settingsRes, bannedRes, auditRes] = await Promise.allSettled([
         adminApi.stats(),
         adminApi.payouts(),
         adminApi.disputes(),
         adminApi.analytics(),
         adminApi.payments({ status: 'pending' }),
+        settingsApi.get(),
+        bannedIpApi.list(),
+        auditApi.list({ page: 1 }),
       ]);
       if (statsRes.status === 'fulfilled') setStats(statsRes.value.data.data);
       if (payoutsRes.status === 'fulfilled') setPayouts(payoutsRes.value.data.data.payouts || []);
       if (disputesRes.status === 'fulfilled') setDisputes(disputesRes.value.data.data.disputes || []);
       if (analyticsRes.status === 'fulfilled') setAnalytics(analyticsRes.value.data.data);
       if (paymentsRes.status === 'fulfilled') setPayments(paymentsRes.value.data.data.requests || []);
+      if (settingsRes.status === 'fulfilled') setSettings(settingsRes.value.data.data.settings || null);
+      if (bannedRes.status === 'fulfilled') setBannedIps(bannedRes.value.data.data.bannedIps || []);
+      if (auditRes.status === 'fulfilled') {
+        setAuditLogs(auditRes.value.data.data.logs || []);
+        setAuditTotalPages(auditRes.value.data.data.pagination?.pages || 1);
+      }
     } finally {
       setLoading(false);
     }
+  }, [isAdmin]);
+
+  const loadAuditLogs = useCallback(async (p: number) => {
+    if (!isAdmin) return;
+    setAuditLoading(true);
+    try {
+      const res = await auditApi.list({ page: p });
+      setAuditLogs(res.data.data.logs || []);
+      setAuditTotalPages(res.data.data.pagination?.pages || 1);
+      setAuditPage(p);
+    } catch {}
+    finally { setAuditLoading(false); }
   }, [isAdmin]);
 
   const loadUsers = useCallback(async () => {
@@ -351,11 +395,58 @@ export default function AdminDashboardPage() {
     }
   };
 
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settings) return;
+    setSettingsSaving(true);
+    setSettingsMsg('');
+    try {
+      const res = await settingsApi.update(settings);
+      setSettings(res.data.data.settings);
+      setSettingsMsg('✅ Settings updated successfully and applied across platform.');
+    } catch (err: any) {
+      setSettingsMsg(`❌ ${err.response?.data?.message || 'Failed to update settings'}`);
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const handleBanIp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newIp.trim()) return;
+    setBanningIp(true);
+    try {
+      await bannedIpApi.ban({ ip: newIp.trim(), reason: newIpReason.trim() || undefined });
+      setNewIp('');
+      setNewIpReason('');
+      const res = await bannedIpApi.list();
+      setBannedIps(res.data.data.bannedIps || []);
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed to ban IP');
+    } finally {
+      setBanningIp(false);
+    }
+  };
+
+  const handleUnbanIp = async (ip: string) => {
+    if (!confirm(`Unban IP ${ip}?`)) return;
+    try {
+      await bannedIpApi.unban(ip);
+      const res = await bannedIpApi.list();
+      setBannedIps(res.data.data.bannedIps || []);
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed to unban IP');
+    }
+  };
+
   const TABS = [
     { id: 'payouts',   label: 'Withdrawals',     Icon: CreditCard,  count: payouts.length },
     { id: 'deposits',  label: 'Deposits Queue',  Icon: DollarSign,  count: payments.length },
     { id: 'disputes',  label: 'Disputes',         Icon: Scale,       count: disputes.length },
     { id: 'users',     label: 'Users',            Icon: Users,       count: stats?.totalUsers || 0 },
+    { id: 'settings',  label: 'System Settings',  Icon: Sliders,     count: null },
+    { id: 'audit',     label: 'Audit Logs',       Icon: FileText,    count: null },
+    { id: 'bannedIps', label: 'Banned IPs',       Icon: Ban,         count: bannedIps.length },
     { id: 'analytics', label: 'Analytics',        Icon: BarChart3,   count: null },
   ] as const;
 
@@ -530,7 +621,7 @@ export default function AdminDashboardPage() {
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input type="text" value={userSearch} onChange={(e) => { setUserSearch(e.target.value); setUserPage(1); }}
-                placeholder="Search by username..." className="v-input pl-9 w-full text-sm" />
+                placeholder="Search by username, email, or IP address..." className="v-input pl-9 w-full text-sm" />
             </div>
 
             <div className="v-card overflow-hidden">
@@ -548,6 +639,11 @@ export default function AdminDashboardPage() {
                       <td className="p-3.5">
                         <p className="font-bold text-slate-900 dark:text-white">{u.username}</p>
                         <p className="text-slate-400 text-[10px]">{u.email}</p>
+                        {(u.lastLoginIp || u.registrationIp) && (
+                          <p className="text-[10px] font-mono text-slate-500 mt-0.5">
+                            IP: {u.lastLoginIp || u.registrationIp}
+                          </p>
+                        )}
                       </td>
                       <td className="p-3.5 text-slate-600 dark:text-slate-300">{u.roles?.join(', ')}</td>
                       <td className="p-3.5 font-bold">
@@ -585,6 +681,382 @@ export default function AdminDashboardPage() {
                 <button onClick={() => setUserPage((p) => Math.min(userTotalPages, p + 1))} disabled={userPage === userTotalPages} className="v-btn-secondary p-2 disabled:opacity-40"><ChevronRight className="w-4 h-4" /></button>
               </div>
             )}
+          </div>
+        )}
+
+        {/* System Settings */}
+        {activeTab === 'settings' && (
+          <div className="space-y-6">
+            <div className="v-card p-6">
+              <div className="flex items-center justify-between mb-4 border-b border-slate-200 dark:border-slate-800 pb-3">
+                <div>
+                  <h3 className="font-black text-slate-900 dark:text-white text-base flex items-center gap-2">
+                    <Sliders className="w-5 h-5 text-blue-600" /> Platform Configuration & Monetization
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Control global fees, timer limits, automation switches, and maintenance status</p>
+                </div>
+              </div>
+
+              {settingsMsg && (
+                <div className={`p-3 rounded-xl text-xs font-semibold mb-4 ${settingsMsg.startsWith('✅') ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800' : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800'}`}>
+                  {settingsMsg}
+                </div>
+              )}
+
+              {settings ? (
+                <form onSubmit={handleSaveSettings} className="space-y-6">
+                  {/* Financial & Commission Rates */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">💰 Financial & Fee Configuration</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Platform Admin Cut (%)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="90"
+                          value={settings.platformFeePercent}
+                          onChange={(e) => setSettings({ ...settings, platformFeePercent: parseFloat(e.target.value) || 0 })}
+                          className="v-input text-sm w-full"
+                          required
+                        />
+                        <span className="text-[10px] text-slate-400">Worker automatically gets (100 - Cut) = {100 - (settings.platformFeePercent || 0)}%</span>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Referral Commission (%)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="50"
+                          value={settings.referralCommissionPercent}
+                          onChange={(e) => setSettings({ ...settings, referralCommissionPercent: parseFloat(e.target.value) || 0 })}
+                          className="v-input text-sm w-full"
+                          required
+                        />
+                        <span className="text-[10px] text-slate-400">Awarded automatically to referrer on earnings & deposits</span>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Min. Deposit ($)
+                        </label>
+                        <input
+                          type="number"
+                          min="0.1"
+                          step="0.01"
+                          value={settings.minDeposit}
+                          onChange={(e) => setSettings({ ...settings, minDeposit: parseFloat(e.target.value) || 1 })}
+                          className="v-input text-sm w-full"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Min. Withdrawal ($)
+                        </label>
+                        <input
+                          type="number"
+                          min="0.1"
+                          step="0.01"
+                          value={settings.minWithdrawal}
+                          onChange={(e) => setSettings({ ...settings, minWithdrawal: parseFloat(e.target.value) || 1 })}
+                          className="v-input text-sm w-full"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Auto-Approve Threshold (Hours)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="720"
+                          value={settings.autoApproveHours}
+                          onChange={(e) => setSettings({ ...settings, autoApproveHours: parseInt(e.target.value) || 48 })}
+                          className="v-input text-sm w-full"
+                          required
+                        />
+                        <span className="text-[10px] text-slate-400">Pending proofs older than this are approved automatically</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Automation & Security Toggles */}
+                  <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">🛡️ Auto-Pilot & Anti-Cheat Toggles</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-bold text-slate-900 dark:text-white">Auto-Approve Cron</p>
+                          <p className="text-[10px] text-slate-500">Hourly automated approval sweep</p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={settings.autoApproveEnabled}
+                          onChange={(e) => setSettings({ ...settings, autoApproveEnabled: e.target.checked })}
+                          className="w-4 h-4 text-blue-600 rounded"
+                        />
+                      </div>
+
+                      <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-bold text-slate-900 dark:text-white">Anti-Cheat Task Guard</p>
+                          <p className="text-[10px] text-slate-500">Block duplicate IP/fingerprint per task</p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={settings.antiCheatEnabled}
+                          onChange={(e) => setSettings({ ...settings, antiCheatEnabled: e.target.checked })}
+                          className="w-4 h-4 text-blue-600 rounded"
+                        />
+                      </div>
+
+                      <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-bold text-slate-900 dark:text-white">Maintenance Mode</p>
+                          <p className="text-[10px] text-slate-500">Block non-admin traffic with 503</p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={settings.maintenanceMode}
+                          onChange={(e) => setSettings({ ...settings, maintenanceMode: e.target.checked })}
+                          className="w-4 h-4 text-red-600 rounded"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Payment Webhook Credentials */}
+                  <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">⚡ Crypto Auto-Deposit Webhooks (NOWPayments / CoinPayments)</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          NOWPayments API Key
+                        </label>
+                        <input
+                          type="password"
+                          value={settings.nowPaymentsApiKey || ''}
+                          onChange={(e) => setSettings({ ...settings, nowPaymentsApiKey: e.target.value })}
+                          placeholder="Configured via env or set here"
+                          className="v-input text-xs w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          NOWPayments IPN Secret
+                        </label>
+                        <input
+                          type="password"
+                          value={settings.nowPaymentsIpnSecret || ''}
+                          onChange={(e) => setSettings({ ...settings, nowPaymentsIpnSecret: e.target.value })}
+                          placeholder="Used to verify HMAC-SHA512 callbacks"
+                          className="v-input text-xs w-full"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end pt-2">
+                    <button
+                      type="submit"
+                      disabled={settingsSaving}
+                      className="v-btn-primary py-2 px-6 flex items-center gap-2 text-xs font-bold"
+                    >
+                      {settingsSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      Save Configuration
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="flex justify-center py-10">
+                  <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Audit Logs */}
+        {activeTab === 'audit' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-black text-slate-900 dark:text-white text-base flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-blue-600" /> System Audit Trail
+                </h3>
+                <p className="text-xs text-slate-500">Immutable ledger of administrative actions, balance adjustments, bans, and automation sweeps</p>
+              </div>
+              <button
+                onClick={() => loadAuditLogs(auditPage)}
+                disabled={auditLoading}
+                className="v-btn-secondary text-xs flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${auditLoading ? 'animate-spin' : ''}`} /> Refresh
+              </button>
+            </div>
+
+            <div className="v-card overflow-hidden">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-bold uppercase">
+                  <tr>
+                    <th className="p-3.5">Timestamp</th>
+                    <th className="p-3.5">Action</th>
+                    <th className="p-3.5">Performed By</th>
+                    <th className="p-3.5">Target</th>
+                    <th className="p-3.5">IP Address</th>
+                    <th className="p-3.5">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {auditLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-8 text-center text-slate-400">No audit logs recorded yet.</td>
+                    </tr>
+                  ) : (
+                    auditLogs.map((log) => (
+                      <tr key={log._id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                        <td className="p-3.5 text-slate-400 whitespace-nowrap">
+                          {new Date(log.createdAt).toLocaleString()}
+                        </td>
+                        <td className="p-3.5 font-bold font-mono">
+                          <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
+                            {log.action}
+                          </span>
+                        </td>
+                        <td className="p-3.5 font-medium text-slate-900 dark:text-white">
+                          {log.performedBy?.username || 'System Automation'}
+                        </td>
+                        <td className="p-3.5 text-slate-600 dark:text-slate-300">
+                          {log.targetUser?.username || '—'}
+                        </td>
+                        <td className="p-3.5 font-mono text-[11px] text-slate-400">
+                          {log.ip || '—'}
+                        </td>
+                        <td className="p-3.5 text-slate-500 max-w-xs truncate font-mono text-[10px]">
+                          {log.details ? JSON.stringify(log.details) : '—'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {auditTotalPages > 1 && (
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  onClick={() => loadAuditLogs(Math.max(1, auditPage - 1))}
+                  disabled={auditPage === 1}
+                  className="v-btn-secondary p-2 disabled:opacity-40"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="text-xs font-semibold text-slate-600">Page {auditPage} / {auditTotalPages}</span>
+                <button
+                  onClick={() => loadAuditLogs(Math.min(auditTotalPages, auditPage + 1))}
+                  disabled={auditPage === auditTotalPages}
+                  className="v-btn-secondary p-2 disabled:opacity-40"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Banned IPs */}
+        {activeTab === 'bannedIps' && (
+          <div className="space-y-6">
+            {/* Add IP Block Form */}
+            <div className="v-card p-5">
+              <h3 className="font-black text-slate-900 dark:text-white text-sm flex items-center gap-2 mb-3">
+                <Ban className="w-4 h-4 text-red-600" /> Block IP Address
+              </h3>
+              <form onSubmit={handleBanIp} className="flex flex-col sm:flex-row gap-3">
+                <input
+                  type="text"
+                  placeholder="e.g. 192.168.1.100"
+                  value={newIp}
+                  onChange={(e) => setNewIp(e.target.value)}
+                  className="v-input text-xs font-mono flex-1"
+                  required
+                />
+                <input
+                  type="text"
+                  placeholder="Reason (e.g. Multiple fake accounts / bot network)"
+                  value={newIpReason}
+                  onChange={(e) => setNewIpReason(e.target.value)}
+                  className="v-input text-xs flex-1"
+                />
+                <button
+                  type="submit"
+                  disabled={banningIp}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shrink-0"
+                >
+                  {banningIp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
+                  Block IP
+                </button>
+              </form>
+            </div>
+
+            {/* Banned IPs List */}
+            <div className="v-card overflow-hidden">
+              <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <h3 className="font-black text-slate-900 dark:text-white text-sm">
+                  Active IP Blacklist ({bannedIps.length})
+                </h3>
+              </div>
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-bold uppercase">
+                  <tr>
+                    <th className="p-3.5">IP Address</th>
+                    <th className="p-3.5">Reason</th>
+                    <th className="p-3.5">Banned By</th>
+                    <th className="p-3.5">Date</th>
+                    <th className="p-3.5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {bannedIps.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="p-8 text-center text-slate-400">
+                        No IP addresses are currently blacklisted.
+                      </td>
+                    </tr>
+                  ) : (
+                    bannedIps.map((b) => (
+                      <tr key={b._id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                        <td className="p-3.5 font-bold font-mono text-red-600 dark:text-red-400">
+                          {b.ip}
+                        </td>
+                        <td className="p-3.5 text-slate-600 dark:text-slate-300">
+                          {b.reason}
+                        </td>
+                        <td className="p-3.5 text-slate-500">
+                          {b.bannedBy?.username || 'Admin'}
+                        </td>
+                        <td className="p-3.5 text-slate-400">
+                          {new Date(b.createdAt).toLocaleDateString()}
+                        </td>
+                        <td className="p-3.5 text-right">
+                          <button
+                            onClick={() => handleUnbanIp(b.ip)}
+                            className="px-2.5 py-1 rounded-lg font-bold text-[10px] bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/40 hover:text-emerald-700"
+                          >
+                            Unban
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 

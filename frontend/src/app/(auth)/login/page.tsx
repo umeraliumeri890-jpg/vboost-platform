@@ -5,6 +5,27 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { Eye, EyeOff, LogIn, AlertCircle } from 'lucide-react';
 
+function getDeviceFingerprint(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    let fp = localStorage.getItem('vboost_dfp');
+    if (!fp) {
+      const nav = window.navigator;
+      const screen = window.screen;
+      const str = `${nav.userAgent}-${nav.language}-${screen.width}x${screen.height}-${new Date().getTimezoneOffset()}`;
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+      }
+      fp = `fp_${Math.abs(hash).toString(36)}_${Math.random().toString(36).substring(2, 8)}`;
+      localStorage.setItem('vboost_dfp', fp);
+    }
+    return fp;
+  } catch {
+    return 'fp_generic';
+  }
+}
+
 export default function LoginPage() {
   const { login } = useAuth();
   const router = useRouter();
@@ -18,7 +39,8 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const loggedUser = await login(form.email, form.password);
+      const fp = getDeviceFingerprint();
+      const loggedUser = await login(form.email, form.password, fp);
       if (loggedUser?.role === 'admin' || loggedUser?.roles?.includes('admin')) {
         router.push('/admin');
       } else {

@@ -94,8 +94,12 @@ const debitBalance = async (opts) => {
  * Must be called within a Mongoose session.
  */
 const processTaskPayout = async ({ advertiser, worker, amount, campaignId, completionId, session }) => {
-  const feePercent = parseFloat(process.env.PLATFORM_FEE_PERCENT) || 25;
-  const platformFee = parseFloat((amount * feePercent / 100).toFixed(4));
+  const SystemSetting = require('../models/SystemSetting');
+  const { notifyUser } = require('./notification.service');
+
+  const settings = await SystemSetting.getSettings();
+  const feePercent = settings.platformFeePercent ?? 25;
+  const platformFee = parseFloat(((amount * feePercent) / 100).toFixed(4));
   const workerEarning = parseFloat((amount - platformFee).toFixed(4));
 
   const refs = {
@@ -121,23 +125,62 @@ const processTaskPayout = async ({ advertiser, worker, amount, campaignId, compl
     balanceType: 'main',
     type: 'task_earn',
     refs: { ...refs, relatedUser: advertiser._id },
-    note: `Earned from task (fee: ${feePercent}%)`,
+    note: `Earned from task (75% payout, platform fee: ${feePercent}%)`,
     session,
   });
 
-  // 3. Log platform fee (platform is implicit beneficiary — no user debit)
+  // 3. Log platform fee
   const feeTxn = new Transaction({
     user: advertiser._id,
     type: 'platform_fee',
     amount: platformFee,
     balanceType: 'ad',
     balanceBefore: advertiser.balances.ad,
-    balanceAfter: advertiser.balances.ad - amount, // approximate
+    balanceAfter: advertiser.balances.ad - amount,
     status: 'completed',
-    note: `Platform fee (${feePercent}%)`,
+    note: `Platform revenue (${feePercent}%)`,
     ...refs,
   });
   await feeTxn.save({ session });
+
+  // 4. Automated Referral System: Award commission to worker's referrer
+  const referralPercent = settings.referralCommissionPercent ?? 5;
+  if (worker.referredBy && referralPercent > 0) {
+    const referralBonus = parseFloat(((workerEarning * referralPercent) / 100).toFixed(4));
+    if (referralBonus > 0) {
+      await creditBalance({
+        userId: worker.referredBy,
+        amount: referralBonus,
+        balanceType: 'main',
+        type: 'referral_bonus',
+        refs: { ...refs, relatedUser: worker._id },
+        note: `Referral commission (${referralPercent}%) from worker @${worker.username}`,
+        session,
+      });
+
+      await User.findByIdAndUpdate(
+        worker.referredBy,
+        { $inc: { referralEarnings: referralBonus } },
+        { session }
+      );
+
+      // Async notification to referrer
+      notifyUser({
+        userId: worker.referredBy,
+        title: '💰 Referral Commission Earned!',
+        message: `You received a $${referralBonus.toFixed(3)} referral bonus (${referralPercent}%) from @${worker.username}'s completed task!`,
+        type: 'referral',
+      }).catch(() => {});
+    }
+  }
+
+  // Notify worker of payout
+  notifyUser({
+    userId: worker._id,
+    title: '✅ Task Payout Received',
+    message: `You earned $${workerEarning.toFixed(3)} from your submitted task proof!`,
+    type: 'task',
+  }).catch(() => {});
 
   return { workerEarning, platformFee, earnTxn };
 };

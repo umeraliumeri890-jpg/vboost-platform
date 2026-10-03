@@ -33,6 +33,9 @@ export interface User {
     threads?: string;
     twitter?: string;
   };
+  registrationIp?: string;
+  lastLoginIp?: string;
+  deviceFingerprint?: string;
 }
 
 export interface Campaign {
@@ -102,3 +105,50 @@ export type TaskCategory =
   | 'site_visit' | 'site_signup'
   | 'google_review' | 'yandex_review'
   | 'custom';
+
+export interface NotificationItem {
+  _id: string;
+  user: string;
+  title: string;
+  message: string;
+  type: 'deposit' | 'withdrawal' | 'task' | 'referral' | 'dispute' | 'system';
+  read: boolean;
+  link?: string | null;
+  createdAt: string;
+}
+
+export interface SystemSettings {
+  _id?: string;
+  platformFeePercent: number;
+  referralCommissionPercent: number;
+  minDeposit: number;
+  minWithdrawal: number;
+  minPayoutPerTask: number;
+  autoApproveHours: number;
+  autoApproveEnabled: boolean;
+  antiCheatEnabled: boolean;
+  maintenanceMode: boolean;
+  nowPaymentsApiKey?: string;
+  nowPaymentsIpnSecret?: string;
+  coinPaymentsMerchantId?: string;
+  coinPaymentsIpnSecret?: string;
+  updatedAt?: string;
+}
+
+export interface AuditLogItem {
+  _id: string;
+  action: string;
+  performedBy?: { _id: string; username: string; email: string };
+  targetUser?: { _id: string; username: string; email: string };
+  details?: Record<string, any>;
+  ip?: string;
+  createdAt: string;
+}
+
+export interface BannedIp {
+  _id: string;
+  ip: string;
+  reason: string;
+  bannedBy?: { _id: string; username: string; email?: string };
+  createdAt: string;
+}

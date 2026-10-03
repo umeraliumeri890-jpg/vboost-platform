@@ -11,10 +11,16 @@ const User = require('../models/User');
 const Campaign = require('../models/Campaign');
 const Completion = require('../models/Completion');
 const Transaction = require('../models/Transaction');
+const SystemSetting = require('../models/SystemSetting');
+const AuditLog = require('../models/AuditLog');
+const BannedIp = require('../models/BannedIp');
 const asyncHandler = require('../utils/asyncHandler');
 const { protect, restrictTo } = require('../middleware/auth');
 const { NotFoundError, AppError } = require('../utils/errors');
 const { creditBalance, debitBalance, processTaskPayout } = require('../services/ledger.service');
+const { logAudit } = require('../services/audit.service');
+const { notifyUser } = require('../services/notification.service');
+const { getClientIp } = require('../middleware/antiCheat');
 
 // Enforce admin privileges across all admin routes
 router.use(protect, restrictTo('admin'));
@@ -175,16 +181,21 @@ router.get('/users', asyncHandler(async (req, res) => {
   const limit = parseInt(req.query.limit) || 20;
   const skip = (page - 1) * limit;
 
-  // Support search by username or email
+  // Support search by username, email, registrationIp, or lastLoginIp
   const filter = {};
   if (req.query.search) {
     const re = new RegExp(req.query.search, 'i');
-    filter.$or = [{ username: re }, { email: re }];
+    filter.$or = [
+      { username: re },
+      { email: re },
+      { registrationIp: re },
+      { lastLoginIp: re },
+    ];
   }
 
   const [users, total] = await Promise.all([
     User.find(filter)
-      .select('username email roles balances gamification stats isBanned banReason socialAccounts createdAt')
+      .select('username email roles balances gamification stats isBanned banReason socialAccounts registrationIp lastLoginIp deviceFingerprint createdAt')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit),
@@ -209,6 +220,14 @@ router.patch('/users/:id/ban', asyncHandler(async (req, res) => {
   user.isBanned = Boolean(ban);
   user.banReason = ban ? (reason || 'Violation of platform terms') : null;
   await user.save();
+
+  await logAudit({
+    action: ban ? 'user_banned' : 'user_unbanned',
+    performedBy: req.user._id,
+    targetUser: user._id,
+    details: { reason },
+    ip: getClientIp(req),
+  });
 
   res.json({
     status: 'success',
@@ -268,6 +287,21 @@ router.patch('/users/:id/balance', asyncHandler(async (req, res) => {
     });
   }
 
+  await logAudit({
+    action: 'balance_adjusted',
+    performedBy: req.user._id,
+    targetUser: req.params.id,
+    details: { amount: numAmount, balanceType: bType, note },
+    ip: getClientIp(req),
+  });
+
+  await notifyUser({
+    userId: req.params.id,
+    title: numAmount > 0 ? 'Balance Credited' : 'Balance Adjusted',
+    message: `Admin adjusted your ${bType} balance by ${numAmount > 0 ? '+' : ''}$${numAmount.toFixed(2)}. ${note ? `Note: ${note}` : ''}`,
+    type: 'system',
+  });
+
   const updated = await User.findById(req.params.id).select('username balances');
   res.json({
     status: 'success',
@@ -290,6 +324,14 @@ router.patch('/users/:id/role', asyncHandler(async (req, res) => {
     { new: true, select: 'username roles' }
   );
   if (!user) throw new NotFoundError('User');
+
+  await logAudit({
+    action: 'roles_updated',
+    performedBy: req.user._id,
+    targetUser: user._id,
+    details: { roles },
+    ip: getClientIp(req),
+  });
 
   res.json({
     status: 'success',
@@ -400,5 +442,169 @@ router.get('/payments', asyncHandler(async (req, res) => {
     data: { requests, pagination: { page, limit, total, pages: Math.ceil(total / limit) } },
   });
 }));
+
+// ─── GET /api/v1/admin/settings ───────────────────────────────────────────────
+router.get(
+  '/settings',
+  asyncHandler(async (req, res) => {
+    const settings = await SystemSetting.getSettings();
+    res.json({
+      status: 'success',
+      data: { settings },
+    });
+  })
+);
+
+// ─── PATCH /api/v1/admin/settings ─────────────────────────────────────────────
+router.patch(
+  '/settings',
+  asyncHandler(async (req, res) => {
+    const allowedFields = [
+      'platformFeePercent',
+      'referralCommissionPercent',
+      'minDeposit',
+      'minWithdrawal',
+      'minPayoutPerTask',
+      'autoApproveHours',
+      'autoApproveEnabled',
+      'antiCheatEnabled',
+      'maintenanceMode',
+      'nowPaymentsApiKey',
+      'nowPaymentsIpnSecret',
+      'coinPaymentsMerchantId',
+      'coinPaymentsIpnSecret',
+    ];
+
+    const updates = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    }
+
+    const settings = await SystemSetting.updateSettings(updates);
+
+    await logAudit({
+      action: 'system_settings_updated',
+      performedBy: req.user._id,
+      details: updates,
+      ip: getClientIp(req),
+    });
+
+    res.json({
+      status: 'success',
+      message: 'System settings updated successfully.',
+      data: { settings },
+    });
+  })
+);
+
+// ─── GET /api/v1/admin/audit-logs ─────────────────────────────────────────────
+router.get(
+  '/audit-logs',
+  asyncHandler(async (req, res) => {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
+    const skip = (page - 1) * limit;
+
+    const filter = {};
+    if (req.query.action) filter.action = req.query.action;
+    if (req.query.targetUser) filter.targetUser = req.query.targetUser;
+
+    const [logs, total] = await Promise.all([
+      AuditLog.find(filter)
+        .populate('performedBy', 'username email')
+        .populate('targetUser', 'username email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      AuditLog.countDocuments(filter),
+    ]);
+
+    res.json({
+      status: 'success',
+      data: {
+        logs,
+        pagination: {
+          total,
+          page,
+          pages: Math.ceil(total / limit) || 1,
+          limit,
+        },
+      },
+    });
+  })
+);
+
+// ─── GET /api/v1/admin/banned-ips ─────────────────────────────────────────────
+router.get(
+  '/banned-ips',
+  asyncHandler(async (req, res) => {
+    const bannedIps = await BannedIp.find()
+      .populate('bannedBy', 'username email')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({
+      status: 'success',
+      data: { bannedIps },
+    });
+  })
+);
+
+// ─── POST /api/v1/admin/banned-ips ────────────────────────────────────────────
+router.post(
+  '/banned-ips',
+  asyncHandler(async (req, res) => {
+    const { ip, reason } = req.body;
+    if (!ip || !ip.trim()) throw new AppError('IP address is required.', 400);
+
+    const cleanIp = ip.trim();
+    const existing = await BannedIp.findOne({ ip: cleanIp });
+    if (existing) throw new AppError('IP address is already banned.', 400);
+
+    const bannedDoc = await BannedIp.create({
+      ip: cleanIp,
+      reason: reason || 'Manual Admin Security Ban',
+      bannedBy: req.user._id,
+    });
+
+    await logAudit({
+      action: 'ip_banned',
+      performedBy: req.user._id,
+      details: { ip: cleanIp, reason },
+      ip: getClientIp(req),
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: `IP ${cleanIp} has been blocked.`,
+      data: { bannedIp: bannedDoc },
+    });
+  })
+);
+
+// ─── DELETE /api/v1/admin/banned-ips/:ip ──────────────────────────────────────
+router.delete(
+  '/banned-ips/:ip',
+  asyncHandler(async (req, res) => {
+    const targetIp = req.params.ip.trim();
+    const removed = await BannedIp.findOneAndDelete({ ip: targetIp });
+    if (!removed) throw new NotFoundError('Banned IP record not found.');
+
+    await logAudit({
+      action: 'ip_unbanned',
+      performedBy: req.user._id,
+      details: { ip: targetIp },
+      ip: getClientIp(req),
+    });
+
+    res.json({
+      status: 'success',
+      message: `IP ${targetIp} unbanned successfully.`,
+    });
+  })
+);
 
 module.exports = router;

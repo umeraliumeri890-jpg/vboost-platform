@@ -110,8 +110,11 @@ const UserSchema = new mongoose.Schema(
       twitter: { type: String, default: null },
     },
 
+    registrationIp: { type: String, default: null, index: true },
     lastLoginAt: { type: Date, default: null },
-    lastLoginIp: { type: String, default: null },
+    lastLoginIp: { type: String, default: null, index: true },
+    deviceFingerprint: { type: String, default: null, index: true },
+    ipAddresses: [{ ip: String, recordedAt: { type: Date, default: Date.now } }],
   },
   {
     timestamps: true,

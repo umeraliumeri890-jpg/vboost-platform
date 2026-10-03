@@ -25,6 +25,9 @@ const { processTaskPayout } = require('../services/ledger.service');
 const { dispatchWebhook } = require('../utils/webhook');
 const { submitToReseller } = require('../services/reseller.service');
 const upload = require('../utils/upload');
+const SystemSetting = require('../models/SystemSetting');
+const { preventMultiAccountTask, getClientIp } = require('../middleware/antiCheat');
+const { notifyUser } = require('../services/notification.service');
 
 const XP_PER_TASK = 10;
 const SUBMISSION_DEADLINE_MINUTES = 30;
@@ -43,6 +46,7 @@ const validate = (req, res, next) => {
 router.post(
   '/',
   protect,
+  preventMultiAccountTask,
   [
     body('campaignId').isMongoId(),
     body('proof.type').isIn(['screenshot', 'text', 'username', 'url', 'none']),
@@ -50,8 +54,10 @@ router.post(
   ],
   validate,
   asyncHandler(async (req, res) => {
-    const { campaignId, proof } = req.body;
+    const { campaignId, proof, deviceFingerprint } = req.body;
     const worker = req.user;
+    const clientIp = getClientIp(req);
+    const fingerprint = req.headers['x-device-fingerprint'] || deviceFingerprint || null;
 
     const campaign = await Campaign.findById(campaignId).populate('advertiser');
     if (!campaign) throw new NotFoundError('Campaign');
@@ -83,6 +89,7 @@ router.post(
     }
 
     const deadline = new Date(Date.now() + SUBMISSION_DEADLINE_MINUTES * 60 * 1000);
+    const settings = await SystemSetting.getSettings();
 
     const completion = new Completion({
       campaign: campaign._id,
@@ -95,12 +102,15 @@ router.post(
       },
       status: proof.type === 'screenshot' ? 'accepted' : 'submitted',
       submissionDeadline: deadline,
-      workerIp: req.ip,
+      workerIp: clientIp,
+      deviceFingerprint: fingerprint,
       userAgent: req.headers['user-agent'],
     });
 
-    if (proof.type !== 'screenshot' && campaign.autoApprove) {
-      const delayMs = (campaign.autoApproveDelay || 0) * 1000;
+    if (proof.type !== 'screenshot') {
+      const delayMs = campaign.autoApprove
+        ? (campaign.autoApproveDelay || 0) * 1000
+        : (settings.autoApproveHours || 48) * 3600 * 1000;
       completion.autoApproveAt = new Date(Date.now() + delayMs);
     }
 
@@ -158,10 +168,11 @@ router.post(
     completion.proof.submittedAt = new Date();
     completion.status = 'submitted';
 
-    if (campaign?.autoApprove) {
-      const delayMs = (campaign.autoApproveDelay || 0) * 1000;
-      completion.autoApproveAt = new Date(Date.now() + delayMs);
-    }
+    const settings = await SystemSetting.getSettings();
+    const delayMs = campaign?.autoApprove
+      ? (campaign.autoApproveDelay || 0) * 1000
+      : (settings.autoApproveHours || 48) * 3600 * 1000;
+    completion.autoApproveAt = new Date(Date.now() + delayMs);
 
     await completion.save();
 
@@ -319,6 +330,13 @@ router.patch(
           }).catch(() => {});
         }
 
+        notifyUser({
+          userId: completion.worker,
+          title: '✅ Task Proof Approved',
+          message: `Your proof for "${campaign.title}" was approved! $${workerEarning.toFixed(3)} credited.`,
+          type: 'task',
+        }).catch(() => {});
+
         return res.json({
           status: 'success',
           message: `Proof approved. Worker earned $${workerEarning.toFixed(4)}${leveledUp ? ` and leveled up to ${newLevel}!` : ''}`,
@@ -356,6 +374,13 @@ router.patch(
         }).catch(() => {});
       }
 
+      notifyUser({
+        userId: completion.worker,
+        title: '❌ Task Proof Rejected',
+        message: `Your proof for "${campaign.title}" was rejected: ${completion.rejectionReason}`,
+        type: 'task',
+      }).catch(() => {});
+
       res.json({
         status: 'success',
         message: 'Proof rejected.',
@@ -379,7 +404,7 @@ router.patch(
   [body('reason').trim().isLength({ min: 20, max: 1000 })],
   validate,
   asyncHandler(async (req, res) => {
-    const completion = await Completion.findById(req.params.id);
+    const completion = await Completion.findById(req.params.id).populate('campaign');
     if (!completion) throw new NotFoundError('Completion');
     if (completion.worker.toString() !== req.user._id.toString()) {
       throw new AppError('Forbidden.', 403);
@@ -395,6 +420,15 @@ router.patch(
     completion.dispute.reason = req.body.reason;
     completion.dispute.filedAt = new Date();
     await completion.save();
+
+    if (completion.campaign?.advertiser) {
+      notifyUser({
+        userId: completion.campaign.advertiser,
+        title: '⚠️ Task Submission Disputed',
+        message: `Worker disputed your rejection for "${completion.campaign.title}". Routed to Administrator queue.`,
+        type: 'dispute',
+      }).catch(() => {});
+    }
 
     res.json({
       status: 'success',

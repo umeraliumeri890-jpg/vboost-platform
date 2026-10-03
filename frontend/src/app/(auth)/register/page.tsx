@@ -1,9 +1,30 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { Eye, EyeOff, UserPlus, AlertCircle, CheckCircle } from 'lucide-react';
+import { Eye, EyeOff, UserPlus, AlertCircle, CheckCircle, Gift } from 'lucide-react';
+
+function getDeviceFingerprint(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    let fp = localStorage.getItem('vboost_dfp');
+    if (!fp) {
+      const nav = window.navigator;
+      const screen = window.screen;
+      const str = `${nav.userAgent}-${nav.language}-${screen.width}x${screen.height}-${new Date().getTimezoneOffset()}`;
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+      }
+      fp = `fp_${Math.abs(hash).toString(36)}_${Math.random().toString(36).substring(2, 8)}`;
+      localStorage.setItem('vboost_dfp', fp);
+    }
+    return fp;
+  } catch {
+    return 'fp_generic';
+  }
+}
 
 export default function RegisterPage() {
   const { register } = useAuth();
@@ -12,6 +33,18 @@ export default function RegisterPage() {
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [refApplied, setRefApplied] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const refParam = params.get('ref') || params.get('referralCode');
+      if (refParam) {
+        setForm((prev) => ({ ...prev, referralCode: refParam }));
+        setRefApplied(true);
+      }
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,7 +52,8 @@ export default function RegisterPage() {
     if (form.password.length < 8) { setError('Password must be at least 8 characters.'); return; }
     setLoading(true);
     try {
-      await register(form.username, form.email, form.password, form.referralCode || undefined);
+      const fp = getDeviceFingerprint();
+      await register(form.username, form.email, form.password, form.referralCode || undefined, undefined, fp);
       router.push('/worker');
     } catch (err: any) {
       setError(err.response?.data?.message || 'Registration failed.');
@@ -79,7 +113,14 @@ export default function RegisterPage() {
           )}
         </div>
         <div>
-          <label className="label">Referral Code <span className="text-slate-500">(optional)</span></label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="label mb-0">Referral Code <span className="text-slate-500">(optional)</span></label>
+            {refApplied && (
+              <span className="flex items-center gap-1 text-xs text-emerald-400 font-medium">
+                <Gift className="w-3 h-3" /> Referral Applied
+              </span>
+            )}
+          </div>
           <input className="input" type="text" placeholder="friend_ref_code" value={form.referralCode}
             onChange={(e) => setForm({ ...form, referralCode: e.target.value })} />
         </div>

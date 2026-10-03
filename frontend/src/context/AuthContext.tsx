@@ -7,8 +7,15 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   isAdmin: boolean;
-  login: (email: string, password: string) => Promise<User>;
-  register: (username: string, email: string, password: string, referralCode?: string) => Promise<User>;
+  login: (email: string, password: string, deviceFingerprint?: string) => Promise<User>;
+  register: (
+    username: string,
+    email: string,
+    password: string,
+    referralCode?: string,
+    ref?: string,
+    deviceFingerprint?: string
+  ) => Promise<User>;
   logout: () => void;
   refreshUser: () => Promise<void>;
 }
@@ -59,8 +66,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   }, [refreshUser]);
 
-  const login = async (email: string, password: string): Promise<User> => {
-    const { data } = await authApi.login({ email, password });
+  const login = async (email: string, password: string, deviceFingerprint?: string): Promise<User> => {
+    const { data } = await authApi.login({ email, password, deviceFingerprint });
     localStorage.setItem('accessToken', data.data.accessToken);
     localStorage.setItem('refreshToken', data.data.refreshToken);
     const normalized = normalizeUser(data.data.user)!;
@@ -72,9 +79,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     username: string,
     email: string,
     password: string,
-    referralCode?: string
+    referralCode?: string,
+    ref?: string,
+    deviceFingerprint?: string
   ): Promise<User> => {
-    const { data } = await authApi.register({ username, email, password, referralCode });
+    const { data } = await authApi.register({ username, email, password, referralCode, ref, deviceFingerprint });
     localStorage.setItem('accessToken', data.data.accessToken);
     localStorage.setItem('refreshToken', data.data.refreshToken);
     const normalized = normalizeUser(data.data.user)!;

@@ -80,8 +80,9 @@ const CompletionSchema = new mongoose.Schema(
     autoApproveAt: { type: Date, default: null }, // Set on submission for auto-approve
 
     // ─── Worker Context ─────────────────────────────────────
-    workerIp: { type: String, default: null },
+    workerIp: { type: String, default: null, index: true },
     userAgent: { type: String, default: null },
+    deviceFingerprint: { type: String, default: null, index: true },
   },
   {
     timestamps: true,
@@ -101,6 +102,8 @@ CompletionSchema.index(
 );
 
 CompletionSchema.index({ status: 1, autoApproveAt: 1 }); // For cron auto-approve job
+CompletionSchema.index({ campaign: 1, workerIp: 1 });
+CompletionSchema.index({ campaign: 1, deviceFingerprint: 1 });
 CompletionSchema.index({ worker: 1, createdAt: -1 });
 CompletionSchema.index({ campaign: 1, status: 1 });
 

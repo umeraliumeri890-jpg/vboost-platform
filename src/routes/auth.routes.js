@@ -15,6 +15,7 @@ const {
   buildAuthResponse,
 } = require('../utils/jwt');
 const { protect } = require('../middleware/auth');
+const { getClientIp } = require('../middleware/antiCheat');
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
 const validate = (req, res, next) => {
@@ -39,10 +40,13 @@ router.post(
       .isLength({ min: 8 })
       .withMessage('Password must be at least 8 characters'),
     body('referralCode').optional().trim(),
+    body('ref').optional().trim(),
+    body('deviceFingerprint').optional().trim(),
   ],
   validate,
   asyncHandler(async (req, res) => {
-    const { username, email, password, referralCode } = req.body;
+    const { username, email, password, referralCode, ref, deviceFingerprint } = req.body;
+    const clientIp = getClientIp(req);
 
     // Check uniqueness
     const existing = await User.findOne({
@@ -53,10 +57,16 @@ router.post(
       throw new AppError(`${field} is already in use.`, 409);
     }
 
-    // Resolve referrer
+    // Resolve referrer (by code OR by username)
     let referredBy = null;
-    if (referralCode) {
-      const referrer = await User.findOne({ referralCode });
+    const refKey = (referralCode || ref || '').trim();
+    if (refKey) {
+      const referrer = await User.findOne({
+        $or: [
+          { referralCode: refKey },
+          { username: new RegExp(`^${refKey}$`, 'i') },
+        ],
+      });
       if (referrer) referredBy = referrer._id;
     }
 
@@ -69,10 +79,14 @@ router.post(
       passwordHash: password, // pre-save hook hashes this
       referredBy,
       referralCode: newReferralCode,
+      registrationIp: clientIp,
+      lastLoginIp: clientIp,
+      deviceFingerprint: deviceFingerprint || null,
+      ipAddresses: [{ ip: clientIp, recordedAt: new Date() }],
     });
     await user.save();
 
-    // If referred, award bonus XP to referrer (async, non-blocking)
+    // If referred, increment referrer's invited count if any
     if (referredBy) {
       User.findByIdAndUpdate(referredBy, {
         $inc: { 'stats.tasksCompleted': 0, referralEarnings: 0 },
@@ -98,10 +112,12 @@ router.post(
   [
     body('email').isEmail().normalizeEmail(),
     body('password').notEmpty(),
+    body('deviceFingerprint').optional().trim(),
   ],
   validate,
   asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
+    const { email, password, deviceFingerprint } = req.body;
+    const clientIp = getClientIp(req);
 
     const user = await User.findOne({ email }).select('+passwordHash +refreshTokenHash');
     if (!user) throw new AppError('Invalid email or password.', 401);
@@ -111,9 +127,16 @@ router.post(
     const valid = await user.comparePassword(password);
     if (!valid) throw new AppError('Invalid email or password.', 401);
 
-    // Update login metadata
+    // Update login metadata & anti-cheat records
     user.lastLoginAt = new Date();
-    user.lastLoginIp = req.ip;
+    user.lastLoginIp = clientIp;
+    if (deviceFingerprint) {
+      user.deviceFingerprint = deviceFingerprint;
+    }
+    if (!user.ipAddresses) {
+      user.ipAddresses = [];
+    }
+    user.ipAddresses.push({ ip: clientIp, recordedAt: new Date() });
 
     const accessToken = signAccessToken(user._id);
     const refreshToken = generateRefreshToken();
