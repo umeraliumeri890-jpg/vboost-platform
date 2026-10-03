@@ -97,7 +97,7 @@ const UserSchema = new mongoose.Schema(
     // ─── Linked Social Accounts ────────────────────────────
     socialAccounts: {
       vk: { type: String, default: null },
-      instagram: { type: String, default: 'duck.665759' }, // default demo handle
+      instagram: { type: String, default: null },
       youtube: { type: String, default: null },
       tiktok: { type: String, default: null },
       telegram: { type: String, default: null },

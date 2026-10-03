@@ -17,6 +17,7 @@ const router = express.Router();
 
 const Campaign = require('../models/Campaign');
 const User = require('../models/User');
+const Completion = require('../models/Completion');
 const asyncHandler = require('../utils/asyncHandler');
 const { AppError, NotFoundError } = require('../utils/errors');
 const { protect, apiKeyAuth, flexAuth, restrictTo, requireScope } = require('../middleware/auth');
@@ -193,6 +194,57 @@ router.get(
     });
   })
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/offers/category-counts — Dynamic category badge counts
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/category-counts', protect, asyncHandler(async (req, res) => {
+  const { prefix } = req.query; // e.g. 'instagram', 'tiktok', 'youtube', 'vk'
+  const userId = req.user._id;
+
+  // Build match for active campaigns not yet completed by this user
+  const completedCampaignIds = await Completion.distinct('campaign', {
+    worker: userId,
+    status: { $in: ['approved', 'auto_approved', 'submitted', 'pending_review', 'accepted'] },
+  });
+
+  const matchStage = {
+    status: 'active',
+    _id: { $nin: completedCampaignIds },
+  };
+  if (prefix) {
+    matchStage.category = { $regex: `^${prefix}`, $options: 'i' };
+  }
+
+  const counts = await Campaign.aggregate([
+    { $match: matchStage },
+    { $group: { _id: '$category', count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+  ]);
+
+  // Also compute sub-filter counts for follows/likes/comments/views
+  const subCounts = {
+    all: 0,
+    follows: 0,
+    likes: 0,
+    comments: 0,
+    views: 0,
+    texts: 0,
+  };
+  counts.forEach(({ _id, count }) => {
+    subCounts.all += count;
+    if (_id.includes('follow') || _id.includes('join') || _id.includes('subscribe')) subCounts.follows += count;
+    else if (_id.includes('like')) subCounts.likes += count;
+    else if (_id.includes('comment')) subCounts.comments += count;
+    else if (_id.includes('watch') || _id.includes('view')) subCounts.views += count;
+    else subCounts.texts += count;
+  });
+
+  res.json({
+    status: 'success',
+    data: { counts, subCounts, total: subCounts.all },
+  });
+}));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/offers/:id — Get Single Campaign

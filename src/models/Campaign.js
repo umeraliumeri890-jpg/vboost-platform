@@ -106,7 +106,7 @@ const CampaignSchema = new mongoose.Schema(
     // Platform fee snapshot at creation time
     platformFeePercent: {
       type: Number,
-      default: parseFloat(process.env.PLATFORM_FEE_PERCENT) || 15,
+      default: parseFloat(process.env.PLATFORM_FEE_PERCENT) || 25,
     },
 
     // ─── Targeting & Constraints ────────────────────────────
@@ -140,7 +140,7 @@ const CampaignSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-    toJSON: { getters: true },
+    toJSON: { getters: true, virtuals: true },
   }
 );
 
@@ -158,6 +158,12 @@ CampaignSchema.virtual('remainingSlots').get(function () {
 // ─── Virtual: remaining budget ────────────────────────────────────────────────
 CampaignSchema.virtual('remainingBudget').get(function () {
   return parseFloat((this.totalBudget - this.spentBudget).toFixed(4));
+});
+
+// Virtual: worker net payout (after 25% platform commission)
+CampaignSchema.virtual('workerPayout').get(function () {
+  const fee = this.platformFeePercent || 25;
+  return parseFloat((this.payoutPerTask * (1 - fee / 100)).toFixed(4));
 });
 
 /**

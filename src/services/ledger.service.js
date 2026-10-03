@@ -94,7 +94,7 @@ const debitBalance = async (opts) => {
  * Must be called within a Mongoose session.
  */
 const processTaskPayout = async ({ advertiser, worker, amount, campaignId, completionId, session }) => {
-  const feePercent = parseFloat(process.env.PLATFORM_FEE_PERCENT) || 15;
+  const feePercent = parseFloat(process.env.PLATFORM_FEE_PERCENT) || 25;
   const platformFee = parseFloat((amount * feePercent / 100).toFixed(4));
   const workerEarning = parseFloat((amount - platformFee).toFixed(4));
 

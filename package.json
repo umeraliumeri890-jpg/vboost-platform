@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "seed": "node src/config/seed.js",
+    "make:admin": "node src/scripts/make-admin.js",
     "client:dev": "npm --prefix frontend run dev",
     "client:build": "npm --prefix frontend run build"
   },

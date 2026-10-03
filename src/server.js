@@ -21,6 +21,7 @@ const completionsRoutes = require('./routes/completions.routes');
 const webhookRoutes = require('./routes/webhook.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const adminRoutes = require('./routes/admin.routes');
+const paymentsRoutes = require('./routes/payments.routes');
 
 // ─── Cron Jobs ────────────────────────────────────────────────────────────────
 require('./services/autoApprove.cron');
@@ -84,6 +85,7 @@ app.use('/api/v1/offers', offersRoutes);
 app.use('/api/v1/completions', completionsRoutes);
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/admin', adminRoutes);
+app.use('/api/v1/payments', paymentsRoutes);
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 const healthPayload = (req, res) =>
