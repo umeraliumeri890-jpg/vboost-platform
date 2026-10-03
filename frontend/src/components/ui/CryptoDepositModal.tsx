@@ -90,8 +90,8 @@ export default function CryptoDepositModal({ isOpen, onClose, onSuccess, balance
           {success ? (
             <div className="text-center py-8 space-y-3">
               <div className="text-5xl">✅</div>
-              <h3 className="text-xl font-black text-slate-900 dark:text-white">Request Submitted!</h3>
-              <p className="text-sm text-slate-500">Your deposit will be verified within 30 minutes. You'll see it in your payment history.</p>
+              <h3 className="text-xl font-black text-slate-900 dark:text-white">Deposit request submitted! Awaiting Admin verification.</h3>
+              <p className="text-sm text-slate-500">Your TXID has been logged. Funds will be credited to your balance upon Admin verification.</p>
               <button onClick={handleClose} className="v-btn-primary mt-2">Close</button>
             </div>
           ) : (

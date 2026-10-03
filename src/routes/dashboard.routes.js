@@ -110,29 +110,37 @@ router.post('/withdraw', protect, asyncHandler(async (req, res) => {
 }));
 
 // ─── POST /api/v1/dashboard/topup ────────────────────────────────────────────
+// Creates a pending PaymentRequest document — DOES NOT increment balance directly!
 router.post('/topup', protect, asyncHandler(async (req, res) => {
-  const { amount, paymentMethod } = req.body;
+  const { amount, paymentMethod, txid, networkAddress } = req.body;
   const numAmount = parseFloat(amount);
 
   if (isNaN(numAmount) || numAmount <= 0) {
     return res.status(400).json({ status: 'fail', message: 'Invalid top-up amount.' });
   }
 
-  const { creditBalance } = require('../services/ledger.service');
-  const { user, transaction } = await creditBalance({
-    userId: req.user._id,
-    amount: numAmount,
-    balanceType: 'ad',
+  const PaymentRequest = require('../models/PaymentRequest');
+
+  const validMethod = paymentMethod || 'other';
+  const cleanTxid = (txid && String(txid).trim()) || `TX_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const request = await PaymentRequest.create({
+    user: req.user._id,
     type: 'deposit',
-    note: `Ad balance top-up via ${paymentMethod || 'Instant Simulator'}`,
+    balanceTarget: 'ad',
+    amount: numAmount,
+    paymentMethod: validMethod,
+    txid: cleanTxid,
+    networkAddress: networkAddress || null,
+    status: 'pending',
   });
 
-  res.json({
+  res.status(201).json({
     status: 'success',
-    message: `$${numAmount.toFixed(2)} added to your Ad Balance!`,
+    message: 'Deposit request submitted! Awaiting Admin verification.',
     data: {
-      balances: user.balances,
-      transaction,
+      request,
+      balances: req.user.balances, // Balance remains unchanged until Admin approval
     },
   });
 }));

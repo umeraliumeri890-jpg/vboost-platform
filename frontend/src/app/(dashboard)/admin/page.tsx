@@ -330,18 +330,33 @@ export default function AdminDashboardPage() {
 
   const handlePaymentAction = async (id: string, action: 'approve' | 'reject') => {
     let adminNote = '';
-    if (action === 'reject') { adminNote = prompt('Rejection reason:') || ''; if (!adminNote) return; }
+    if (action === 'reject') {
+      adminNote = prompt('Enter rejection reason:') || '';
+      if (!adminNote) return;
+    }
     setActionLoading(id);
-    try { await adminApi.handlePayment(id, action, adminNote); await loadData(); }
-    catch { alert('Failed.'); } finally { setActionLoading(null); }
+    try {
+      if (action === 'approve') {
+        const res = await adminApi.approveDeposit(id);
+        alert(res?.data?.message || 'Deposit approved! User balance updated.');
+      } else {
+        const res = await adminApi.rejectDeposit(id, adminNote);
+        alert(res?.data?.message || 'Deposit rejected. User balance remains unchanged.');
+      }
+      await loadData();
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Action failed.');
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   const TABS = [
-    { id: 'payouts',   label: 'Withdrawals',  Icon: CreditCard,  count: payouts.length },
-    { id: 'deposits',  label: 'Deposits',      Icon: DollarSign,  count: payments.length },
-    { id: 'disputes',  label: 'Disputes',      Icon: Scale,       count: disputes.length },
-    { id: 'users',     label: 'Users',         Icon: Users,       count: stats?.totalUsers || 0 },
-    { id: 'analytics', label: 'Analytics',     Icon: BarChart3,   count: null },
+    { id: 'payouts',   label: 'Withdrawals',     Icon: CreditCard,  count: payouts.length },
+    { id: 'deposits',  label: 'Deposits Queue',  Icon: DollarSign,  count: payments.length },
+    { id: 'disputes',  label: 'Disputes',         Icon: Scale,       count: disputes.length },
+    { id: 'users',     label: 'Users',            Icon: Users,       count: stats?.totalUsers || 0 },
+    { id: 'analytics', label: 'Analytics',        Icon: BarChart3,   count: null },
   ] as const;
 
   return (
@@ -460,8 +475,8 @@ export default function AdminDashboardPage() {
                       {p.status === 'pending' && (
                         actionLoading === p._id ? <Loader2 className="w-4 h-4 animate-spin ml-auto" /> : (
                           <div className="flex justify-end gap-1.5">
-                            <button onClick={() => handlePaymentAction(p._id, 'approve')} className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg font-bold hover:bg-emerald-700">Approve</button>
-                            <button onClick={() => handlePaymentAction(p._id, 'reject')} className="px-2.5 py-1 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700">Reject</button>
+                            <button onClick={() => handlePaymentAction(p._id, 'approve')} className="px-3 py-1 bg-emerald-600 text-white rounded-lg font-bold hover:bg-emerald-700 whitespace-nowrap">Approve Request</button>
+                            <button onClick={() => handlePaymentAction(p._id, 'reject')} className="px-3 py-1 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 whitespace-nowrap">Reject Request</button>
                           </div>
                         )
                       )}

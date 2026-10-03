@@ -78,13 +78,14 @@ router.post(
       balanceTarget,
       amount: parseFloat(amount),
       paymentMethod,
-      txid,
+      txid: txid.trim(),
       networkAddress: PLATFORM_ADDRESSES[paymentMethod] || null,
+      status: 'pending',
     });
 
     res.status(201).json({
       status: 'success',
-      message: 'Deposit request submitted. Admin will verify and credit your balance within 30 minutes.',
+      message: 'Deposit request submitted! Awaiting Admin verification.',
       data: { request },
     });
   })
@@ -254,5 +255,77 @@ router.patch(
     });
   })
 );
+
+// ─── PATCH /api/v1/payments/admin/approve-deposit/:id ────────────────────────
+// Balance increment ONLY executes upon explicit manual Admin approval
+const handleApproveDeposit = asyncHandler(async (req, res) => {
+  const payReq = await PaymentRequest.findById(req.params.id).populate('user');
+  if (!payReq) {
+    return res.status(404).json({ status: 'fail', message: 'Deposit request not found.' });
+  }
+  if (payReq.type !== 'deposit') {
+    return res.status(400).json({ status: 'fail', message: 'Request is not a deposit.' });
+  }
+  if (payReq.status !== 'pending') {
+    return res.status(400).json({ status: 'fail', message: `Deposit request is already ${payReq.status}.` });
+  }
+
+  // Execute balance increment ONLY now upon Admin approval
+  const { user: updatedUser } = await creditBalance({
+    userId: payReq.user._id,
+    amount: payReq.amount,
+    balanceType: payReq.balanceTarget || 'ad',
+    type: 'deposit',
+    note: `${payReq.paymentMethod} deposit approved (TXID: ${payReq.txid || 'N/A'})`,
+  });
+
+  payReq.status = 'completed';
+  payReq.processedBy = req.user._id;
+  payReq.processedAt = new Date();
+  payReq.adminNote = req.body.adminNote || 'Approved by Admin';
+  await payReq.save();
+
+  res.json({
+    status: 'success',
+    message: `Deposit of $${payReq.amount.toFixed(2)} approved! User ${payReq.user.username} balance updated.`,
+    data: {
+      request: payReq,
+      userBalances: updatedUser?.balances,
+    },
+  });
+});
+
+router.patch('/admin/approve-deposit/:id', protect, restrictTo('admin'), handleApproveDeposit);
+router.post('/admin/approve-deposit/:id', protect, restrictTo('admin'), handleApproveDeposit);
+
+// ─── PATCH /api/v1/payments/admin/reject-deposit/:id ─────────────────────────
+// Rejects deposit request — User balance remains unchanged
+const handleRejectDeposit = asyncHandler(async (req, res) => {
+  const payReq = await PaymentRequest.findById(req.params.id).populate('user');
+  if (!payReq) {
+    return res.status(404).json({ status: 'fail', message: 'Deposit request not found.' });
+  }
+  if (payReq.type !== 'deposit') {
+    return res.status(400).json({ status: 'fail', message: 'Request is not a deposit.' });
+  }
+  if (payReq.status !== 'pending') {
+    return res.status(400).json({ status: 'fail', message: `Deposit request is already ${payReq.status}.` });
+  }
+
+  payReq.status = 'rejected';
+  payReq.processedBy = req.user._id;
+  payReq.processedAt = new Date();
+  payReq.adminNote = req.body.adminNote || req.body.reason || 'Rejected by Admin';
+  await payReq.save();
+
+  res.json({
+    status: 'success',
+    message: 'Deposit request rejected. User balance remains unchanged.',
+    data: { request: payReq },
+  });
+});
+
+router.patch('/admin/reject-deposit/:id', protect, restrictTo('admin'), handleRejectDeposit);
+router.post('/admin/reject-deposit/:id', protect, restrictTo('admin'), handleRejectDeposit);
 
 module.exports = router;

@@ -140,4 +140,8 @@ export const adminApi = {
     api.get('/admin/payments', { params }),
   handlePayment: (id: string, action: 'approve' | 'reject', adminNote?: string) =>
     api.patch(`/payments/admin/${id}`, { action, adminNote }),
+  approveDeposit: (id: string, adminNote?: string) =>
+    api.patch(`/payments/admin/approve-deposit/${id}`, { adminNote }),
+  rejectDeposit: (id: string, adminNote?: string) =>
+    api.patch(`/payments/admin/reject-deposit/${id}`, { adminNote }),
 };
